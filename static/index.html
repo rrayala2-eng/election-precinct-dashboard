@@ -233,7 +233,10 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script>
-const API_BASE = "http://localhost:8000";
+// Empty string = relative paths (e.g. "/api/election-data"). This works
+// automatically once the backend serves this file itself, on any domain --
+// no hardcoded localhost, no CORS setup needed for production.
+const API_BASE = "";
 const PALETTE = ["#1f3a34", "#7a3226", "#a3852f", "#445566", "#6b3fa0", "#2f7a8c"];
 
 let map, geoLayer;
