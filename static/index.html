@@ -1,0 +1,621 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Precinct Election Dashboard</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;0,9..144,700;1,9..144,500;1,9..144,600&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#17201b; --paper:#f6f2e7; --card:#fffdf8; --line:#ddd3ba;
+    --gold:#a3852f; --gold-deep:#8a6f26; --deep:#1f3a34;
+    --oxblood:#7a3226; --slate:#445566; --muted:#726c5c;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:"Inter",sans-serif;background:var(--paper);color:var(--ink);-webkit-font-smoothing:antialiased;}
+  .mono{font-family:"IBM Plex Mono",monospace;}
+  .serif{font-family:"Fraunces",serif;}
+
+  header{padding:30px 32px 20px;position:relative;}
+  header::after{content:"";position:absolute;left:32px;right:32px;bottom:0;height:3px;
+    background:linear-gradient(to bottom, var(--gold) 0 1px, transparent 1px 2px, var(--gold) 2px 3px);}
+  .eyebrow{font-family:"IBM Plex Mono",monospace;font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--gold-deep);margin:0 0 8px;}
+  header h1{margin:0;font-family:"Fraunces",serif;font-size:30px;font-weight:600;letter-spacing:-.015em;color:var(--ink);}
+  header p{margin:6px 0 0;color:var(--muted);font-size:13px;font-family:"Inter",sans-serif;}
+
+  .controls{display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end;padding:20px 32px;background:var(--card);border-bottom:1px solid var(--line);}
+  .field{display:flex;flex-direction:column;gap:5px;}
+  .field label{font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--gold-deep);font-family:"IBM Plex Mono",monospace;font-weight:500;}
+  .field select, .field input{padding:9px 11px;border:1px solid var(--line);border-radius:3px;font-size:14px;background:#fff;min-width:120px;font-family:"IBM Plex Mono",monospace;color:var(--ink);transition:border-color .15s;}
+  .field select:focus, .field input:focus{outline:none;border-color:var(--gold);}
+  .go-btn{padding:10px 24px;background:var(--deep);color:#fdfaf2;border:none;border-radius:3px;font-size:13px;font-family:"IBM Plex Mono",monospace;font-weight:500;cursor:pointer;letter-spacing:.04em;transition:background .15s;}
+  .go-btn:hover{background:var(--ink);}
+  .go-btn:disabled{background:#b8b2a0;cursor:default;}
+
+  .status{padding:12px 32px;font-family:"IBM Plex Mono",monospace;font-size:12.5px;color:var(--muted);}
+  .status.error{color:var(--oxblood);}
+
+  .layout{display:flex;flex-wrap:wrap;gap:20px;padding:20px 32px 44px;}
+  .col-left{flex:1 1 320px;max-width:380px;display:flex;flex-direction:column;gap:16px;}
+  .col-right{flex:3 1 560px;min-width:320px;display:flex;flex-direction:column;gap:16px;}
+
+  .card{background:var(--card);border:1px solid var(--line);border-radius:4px;padding:18px 20px;box-shadow:0 1px 3px rgba(23,32,27,0.04);}
+  .card h2{margin:0 0 14px;font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--gold-deep);font-family:"IBM Plex Mono",monospace;font-weight:500;border-bottom:1px solid var(--line);padding-bottom:10px;}
+
+  .cand-row{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid #efe9da;}
+  .cand-row:last-child{border-bottom:none;}
+  .cand-name{font-family:"Fraunces",serif;font-weight:600;font-size:16.5px;color:var(--ink);}
+  .cand-meta{font-size:11.5px;color:var(--muted);font-family:"IBM Plex Mono",monospace;margin-top:1px;}
+  .cand-votes{font-family:"IBM Plex Mono",monospace;font-size:13px;text-align:right;color:var(--ink);}
+  .swatch{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:7px;}
+
+  .stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+  .stat-box{border:1px solid var(--line);border-radius:4px;padding:12px 14px;background:var(--card);}
+  .stat-box .label{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--gold-deep);font-family:"IBM Plex Mono",monospace;}
+  .stat-box .value{font-size:19px;font-weight:600;margin-top:3px;font-family:"Fraunces",serif;color:var(--ink);}
+
+  #map{height:600px;border-radius:4px;border:1px solid var(--line);background:#ece6d4;}
+  .legend{font-size:11.5px;font-family:"IBM Plex Mono",monospace;color:var(--muted);}
+  .legend-bar{height:9px;border-radius:4px;margin:7px 0;}
+  .legend-labels{display:flex;justify-content:space-between;}
+
+  .empty-state{padding:60px 20px;text-align:center;color:var(--muted);font-family:"Inter",sans-serif;font-size:14px;}
+  .leaflet-popup-content{font-family:"IBM Plex Mono",monospace;font-size:12px;min-width:210px;}
+  .leaflet-popup-content table{width:100%;border-collapse:collapse;}
+  .leaflet-popup-content td{padding:2px 0;}
+  .leaflet-popup-content td.k{color:var(--muted);}
+  .leaflet-popup-content td.v{text-align:right;font-weight:600;}
+  .leaflet-popup-content .title{font-weight:600;font-size:14px;margin-bottom:4px;font-family:"Fraunces",serif;}
+
+  footer{padding:14px 32px 30px;font-size:11px;color:#a89f88;font-family:"Inter",sans-serif;line-height:1.6;border-top:1px solid var(--line);margin-top:6px;}
+
+  .tabs{display:flex;gap:4px;padding:0 32px;background:var(--card);border-bottom:1px solid var(--line);}
+  .tab-btn{padding:14px 22px;border:none;background:none;font-family:"IBM Plex Mono",monospace;font-size:12.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent;transition:color .15s;}
+  .tab-btn.active{color:var(--deep);border-bottom-color:var(--gold);font-weight:600;}
+  .tab-btn:hover{color:var(--deep);}
+
+  .predict-layout{padding:20px 32px 44px;max-width:900px;}
+  .methodology-box{background:#efe8d5;border:1px solid var(--line);border-left:3px solid var(--gold);border-radius:3px;padding:14px 18px;font-size:12px;color:var(--muted);margin-bottom:18px;line-height:1.6;font-family:"Inter",sans-serif;}
+  .finalist-cards{display:flex;gap:18px;margin-bottom:18px;}
+  .finalist-card{flex:1;background:var(--card);border:1px solid var(--line);border-radius:5px;padding:20px;box-shadow:0 1px 3px rgba(23,32,27,0.04);}
+  .finalist-card.leader{border-color:var(--gold);border-width:2px;box-shadow:0 2px 8px rgba(163,133,47,0.12);}
+  .finalist-card .fc-name{font-family:"Fraunces",serif;font-size:20px;font-weight:600;color:var(--ink);}
+  .finalist-card .fc-meta{font-size:12px;color:var(--muted);font-family:"IBM Plex Mono",monospace;margin-top:3px;}
+  .finalist-card .fc-score{font-size:34px;font-weight:600;font-family:"Fraunces",serif;margin-top:14px;color:var(--ink);}
+  .finalist-card .fc-crown{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--gold-deep);font-weight:600;margin-bottom:8px;font-family:"IBM Plex Mono",monospace;}
+  .lean-badge{display:inline-block;padding:7px 18px;border-radius:20px;font-family:"IBM Plex Mono",monospace;font-weight:600;font-size:12.5px;letter-spacing:.04em;margin-bottom:18px;}
+  .lean-Toss-up{background:#e8e0c5;color:#6b5a1f;}
+  .lean-Lean{background:#dbe3de;color:var(--deep);}
+  .lean-Likely{background:#c3d4cb;color:var(--deep);}
+  .lean-Safe{background:var(--deep);color:#fdfaf2;}
+  .factor-row{display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid #efe9da;font-family:"IBM Plex Mono",monospace;font-size:12px;}
+</style>
+</head>
+<body>
+
+<header>
+  <p class="eyebrow">California &middot; Precinct-Level Returns</p>
+  <h1>Precinct Election Dashboard</h1>
+  <p>office + district + year + election type &rarr; who ran, vote % per precinct, segmentation</p>
+</header>
+
+<div class="tabs">
+  <button class="tab-btn active" id="tabResultsBtn">Results</button>
+  <button class="tab-btn" id="tabPredictionBtn">Prediction</button>
+</div>
+
+<div id="resultsView">
+<div class="controls">
+  <div class="field">
+    <label for="office">Office</label>
+    <select id="office">
+      <option value="SEN">State Senate</option>
+      <option value="ASS">State Assembly</option>
+      <option value="CNG">U.S. Congress</option>
+      <option value="GOV">Governor</option>
+      <option value="LTG">Lieutenant Governor</option>
+      <option value="ATG">Attorney General</option>
+      <option value="SOS">Secretary of State</option>
+      <option value="CON">Controller</option>
+      <option value="TRS">Treasurer</option>
+      <option value="INS">Insurance Commissioner</option>
+      <option value="SPI">Superintendent of Public Instruction</option>
+      <option value="BOE">Board of Equalization</option>
+      <option value="USS">U.S. Senate</option>
+    </select>
+  </div>
+  <div class="field">
+    <label for="district">District</label>
+    <input id="district" type="number" min="1" placeholder="e.g. 10" value="10">
+  </div>
+  <div class="field">
+    <label for="year">Year</label>
+    <input id="year" type="number" min="2000" max="2030" value="2022">
+  </div>
+  <div class="field">
+    <label for="electionType">Election</label>
+    <select id="electionType">
+      <option value="General">General</option>
+      <option value="Primary">Primary</option>
+    </select>
+  </div>
+  <button class="go-btn" id="loadBtn">Load results</button>
+</div>
+
+<div id="status" class="status"></div>
+
+<div id="content" class="layout" style="display:none;">
+  <div class="col-left">
+    <div class="card">
+      <h2 id="candidatesHeading">Who ran</h2>
+      <div id="candidatesList"></div>
+    </div>
+
+    <div class="stat-grid" id="statGrid"></div>
+
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <span class="mono" style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);">Map color</span>
+      </div>
+      <select id="colorMode" style="width:100%;padding:8px;border:1px solid var(--line);border-radius:4px;font-family:'Courier New',monospace;">
+        <option value="margin">Leading candidate margin</option>
+        <option value="turnout">Turnout %</option>
+        <option value="mail">Mail vs in-person %</option>
+      </select>
+      <div class="legend" style="margin-top:12px;">
+        <div id="legendTitle">Margin</div>
+        <div class="legend-bar" id="legendBar"></div>
+        <div class="legend-labels" id="legendLabels"><span>-</span><span>-</span><span>-</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-right">
+    <div id="map"></div>
+    <div id="mapUnavailable" class="empty-state" style="display:none;border:1px solid var(--line);border-radius:6px;background:var(--card);">
+      No map available for this result -- statewide live results don't include a geographic breakdown.
+    </div>
+  </div>
+</div>
+
+<div id="emptyState" class="empty-state">Pick an office, district, year, and election type above, then click "Load results."</div>
+
+<footer>Segmentation shown reflects only what the source county reported for that precinct: turnout % and mail vs in-person split. Party-registration breakdown is not consistently available. Candidate names are auto-fetched from CA Secretary of State certified candidate lists; a name may show as an unresolved column code if no certified or write-in record was found.</footer>
+</div>
+
+<div id="predictionView" style="display:none;">
+  <div class="controls">
+    <div class="field">
+      <label for="predOffice">Office</label>
+      <select id="predOffice">
+        <option value="SEN">State Senate</option>
+        <option value="ASS">State Assembly</option>
+        <option value="CNG">U.S. Congress</option>
+        <option value="GOV">Governor</option>
+        <option value="LTG">Lieutenant Governor</option>
+        <option value="ATG">Attorney General</option>
+        <option value="SOS">Secretary of State</option>
+        <option value="CON">Controller</option>
+        <option value="TRS">Treasurer</option>
+        <option value="INS">Insurance Commissioner</option>
+        <option value="SPI">Superintendent of Public Instruction</option>
+        <option value="BOE">Board of Equalization</option>
+        <option value="USS">U.S. Senate</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="predDistrict">District</label>
+      <input id="predDistrict" type="number" min="1" placeholder="e.g. 10" value="6">
+    </div>
+    <div class="field">
+      <label for="predYear">General election year</label>
+      <input id="predYear" type="number" min="2000" max="2030" value="2026">
+    </div>
+    <button class="go-btn" id="predictBtn">Predict winner</button>
+  </div>
+
+  <div id="predictStatus" class="status"></div>
+
+  <div id="predictContent" class="predict-layout" style="display:none;">
+    <div id="leanBadge"></div>
+    <div class="finalist-cards" id="finalistCards"></div>
+    <div class="card">
+      <h2>Factors used</h2>
+      <div id="factorBreakdown"></div>
+    </div>
+    <div class="methodology-box" id="methodologyBox" style="margin-top:16px;"></div>
+  </div>
+
+  <div id="predictEmptyState" class="empty-state">Pick an office, district, and the GENERAL election year you want projected, then click "Predict winner." This uses that year's PRIMARY results to estimate the likely general-election outcome.</div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+const API_BASE = "http://localhost:8000";
+const PALETTE = ["#1f3a34", "#7a3226", "#a3852f", "#445566", "#6b3fa0", "#2f7a8c"];
+
+let map, geoLayer;
+let currentData = null;
+let colorMode = "margin";
+
+function initMap() {
+  if (map) return;
+  map = L.map('map').setView([37.0, -119.5], 6);
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+    attribution: '&copy; OpenStreetMap &copy; CARTO', maxZoom: 19
+  }).addTo(map);
+}
+
+function toNum(v) { return (v === null || v === undefined || v === '') ? null : Number(v); }
+function fmtNum(v) { return toNum(v) === null ? 'n/a' : Number(v).toLocaleString(); }
+function fmtPct(v) { return toNum(v) === null ? 'n/a' : Number(v).toFixed(1) + '%'; }
+
+// Precinct-pathway candidates are keyed by SOV column code (e.g. "SENDEM01");
+// live-pathway candidates have no column code at all, just a name -- vote
+// data in that case is stored under the candidate's actual name instead.
+// This helper picks whichever key actually applies so the rest of the code
+// doesn't need to know which pathway produced the data.
+function getCandidateKey(c) { return c.column || c.name; }
+
+function setStatus(msg, isError) {
+  const el = document.getElementById('status');
+  el.textContent = msg || '';
+  el.className = 'status' + (isError ? ' error' : '');
+}
+
+async function loadResults() {
+  const office = document.getElementById('office').value;
+  const district = document.getElementById('district').value;
+  const year = document.getElementById('year').value;
+  const electionType = document.getElementById('electionType').value;
+  const btn = document.getElementById('loadBtn');
+
+  if (!year) { setStatus('Enter a year.', true); return; }
+
+  btn.disabled = true;
+  setStatus('Fetching and joining election data \u2014 this can take a while on a first-time request for a given year...');
+  document.getElementById('content').style.display = 'none';
+  document.getElementById('emptyState').style.display = 'none';
+
+  const params = new URLSearchParams({ office, year, election_type: electionType });
+  if (district) params.set('district', district);
+
+  try {
+    const resp = await fetch(`${API_BASE}/api/election-data?${params.toString()}`);
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err.detail || `Request failed (${resp.status})`);
+    }
+    const data = await resp.json();
+    currentData = data;
+
+    // Truly empty (e.g. invalid district) vs "no map by design" (statewide
+    // live results, granularity 'none') are different situations -- only
+    // the first one is actually an error worth surfacing as such.
+    if (!data.candidates || data.candidates.length === 0) {
+      document.getElementById('content').style.display = 'none';
+      document.getElementById('emptyState').style.display = 'block';
+      const districtLabel = district ? `District ${district}` : '(statewide)';
+      document.getElementById('emptyState').textContent =
+        `No results found for ${office} ${districtLabel}, ${electionType} ${year}. ` +
+        `This district may not exist for this office/year, or boundaries may have shifted -- double-check the district number.`;
+      setStatus('No results.', true);
+      return;
+    }
+
+    document.getElementById('content').style.display = 'flex';
+    renderCandidates(data);
+    renderStats(data);
+
+    const hasMap = data.granularity !== 'none' && data.geojson && data.geojson.features && data.geojson.features.length > 0;
+    document.getElementById('map').style.display = hasMap ? 'block' : 'none';
+    document.getElementById('mapUnavailable').style.display = hasMap ? 'none' : 'block';
+
+    if (hasMap) {
+      const turnoutOpt = document.querySelector('#colorMode option[value="turnout"]');
+      const mailOpt = document.querySelector('#colorMode option[value="mail"]');
+      const precinctOnly = data.granularity !== 'precinct';
+      turnoutOpt.disabled = precinctOnly;
+      mailOpt.disabled = precinctOnly;
+      if (precinctOnly && colorMode !== 'margin') {
+        colorMode = 'margin';
+        document.getElementById('colorMode').value = 'margin';
+      }
+      // Give the browser a frame to actually lay out the now-visible container
+      // before Leaflet measures it -- initializing/rendering into a
+      // still-hidden (display:none) container is what caused the map to
+      // show as a tiny, misrendered world view instead of zooming to the data.
+      requestAnimationFrame(() => {
+        renderMap(data);
+      });
+    }
+
+    const areaWord = data.granularity === 'county' ? 'counties' : 'precincts';
+    const areaCount = data.geojson && data.geojson.features ? data.geojson.features.length : 0;
+    const sourceNote = data.granularity === 'county' || data.granularity === 'none'
+      ? ' (live results -- county-level, not precinct-level)'
+      : '';
+    setStatus(hasMap
+      ? `Loaded ${areaCount} ${areaWord}${sourceNote}.`
+      : `Loaded statewide live results${sourceNote}.`);
+  } catch (e) {
+    setStatus(e.message, true);
+    document.getElementById('emptyState').style.display = 'block';
+    document.getElementById('emptyState').textContent = 'Could not load results: ' + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function renderCandidates(data) {
+  document.getElementById('candidatesHeading').textContent =
+    `Who ran \u2014 ${data.office} ${data.district ? 'District ' + data.district : '(statewide)'}, ${data.election_type} ${data.year}`;
+
+  const list = document.getElementById('candidatesList');
+  list.innerHTML = '';
+  const sorted = [...data.candidates].sort((a, b) => b.total_votes - a.total_votes);
+  // Percentages are still based on the TRUE total (including any unresolved
+  // slots), so the numbers stay accurate -- only the display rows for
+  // unresolved candidates are hidden.
+  const totalVotes = sorted.reduce((s, c) => s + c.total_votes, 0);
+  // "Unresolved" only applies to the precinct pathway (a column code with no
+  // matching PDF name). Live-pathway candidates never have a `column` field
+  // at all, so they're always considered resolved here.
+  const resolved = sorted.filter(c => !c.column || c.name !== c.column);
+
+  resolved.forEach((c, i) => {
+    const pct = totalVotes > 0 ? (c.total_votes / totalVotes * 100).toFixed(1) : '0.0';
+    const incumbentTag = c.incumbent ? ' <span style="color:var(--muted);font-weight:400;">(Incumbent)</span>' : '';
+    const row = document.createElement('div');
+    row.className = 'cand-row';
+    row.innerHTML = `
+      <div>
+        <div class="cand-name"><span class="swatch" style="background:${PALETTE[i % PALETTE.length]}"></span>${c.name}${incumbentTag}</div>
+        <div class="cand-meta">${c.party}</div>
+      </div>
+      <div class="cand-votes">${fmtNum(c.total_votes)}<br><span style="color:var(--muted)">${pct}%</span></div>
+    `;
+    list.appendChild(row);
+  });
+}
+
+function renderStats(data) {
+  const feats = (data.geojson && data.geojson.features) || [];
+  // Total votes always comes from the candidates array -- present and
+  // accurate regardless of pathway/granularity. Registration and turnout
+  // are precinct-pathway-only fields; only shown if actually present.
+  const totalVotes = data.candidates.reduce((s, c) => s + (c.total_votes || 0), 0);
+
+  let totalReg = 0, turnoutSum = 0, turnoutCount = 0, hasRegData = false;
+  feats.forEach(f => {
+    const p = f.properties;
+    if (p.TOTREG !== undefined) {
+      hasRegData = true;
+      totalReg += toNum(p.TOTREG) || 0;
+      const t = toNum(p.TURNOUT_PCT);
+      if (t !== null) { turnoutSum += t; turnoutCount++; }
+    }
+  });
+
+  const areaLabel = data.granularity === 'county' ? 'Counties' : 'Precincts';
+  const grid = document.getElementById('statGrid');
+  grid.innerHTML = `
+    <div class="stat-box"><div class="label">${areaLabel}</div><div class="value">${feats.length || '\u2014'}</div></div>
+    <div class="stat-box"><div class="label">Total votes</div><div class="value">${fmtNum(totalVotes)}</div></div>
+    <div class="stat-box"><div class="label">Registered</div><div class="value">${hasRegData ? fmtNum(totalReg) : 'n/a'}</div></div>
+    <div class="stat-box"><div class="label">Avg turnout</div><div class="value">${turnoutCount ? (turnoutSum / turnoutCount).toFixed(1) + '%' : 'n/a'}</div></div>
+  `;
+}
+
+function marginColorFor(props, candidateCols) {
+  const votes = candidateCols.map(c => toNum(props[c]) || 0);
+  const total = votes.reduce((a, b) => a + b, 0);
+  if (total === 0) return '#e7e0c8';
+  let maxIdx = 0;
+  for (let i = 1; i < votes.length; i++) if (votes[i] > votes[maxIdx]) maxIdx = i;
+  const share = votes[maxIdx] / total;
+  const base = PALETTE[maxIdx % PALETTE.length];
+  const alpha = 0.25 + share * 0.65;
+  return hexWithAlpha(base, alpha);
+}
+
+function hexWithAlpha(hex, alpha) {
+  const r = parseInt(hex.slice(1, 3), 16), g = parseInt(hex.slice(3, 5), 16), b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+function turnoutColorFor(props) {
+  const t = toNum(props.TURNOUT_PCT);
+  if (t === null) return '#e7e0c8';
+  return hexWithAlpha('#1f3a34', 0.15 + Math.min(t, 100) / 100 * 0.75);
+}
+
+function mailColorFor(props) {
+  const m = toNum(props.MAIL_PCT);
+  if (m === null) return '#e7e0c8';
+  return hexWithAlpha('#a3852f', 0.15 + Math.min(m, 100) / 100 * 0.75);
+}
+
+function styleFeature(f, candidateCols) {
+  let fill;
+  if (colorMode === 'margin') fill = marginColorFor(f.properties, candidateCols);
+  else if (colorMode === 'turnout') fill = turnoutColorFor(f.properties);
+  else fill = mailColorFor(f.properties);
+  return { fillColor: fill, weight: 0.6, color: '#c9bc98', fillOpacity: 1 };
+}
+
+function popupHtml(props, candidates) {
+  const resolved = candidates.filter(c => !c.column || c.name !== c.column);
+  let candidateVotesSum = 0;
+  let rows = resolved.map(c => {
+    const key = getCandidateKey(c);
+    const v = toNum(props[key]);
+    if (v !== null) candidateVotesSum += v;
+    const pct = toNum(props[key + '_PCT']);
+    return `<tr><td class="k">${c.name}</td><td class="v">${fmtNum(v)} (${fmtPct(pct)})</td></tr>`;
+  }).join('');
+
+  // Precinct features have SRPREC; county features have CountyName instead.
+  const title = props.SRPREC ? `Precinct ${props.SRPREC}` : (props.CountyName || props.county_slug || 'Area');
+  const subtitle = props.SRPREC ? (props.COUNTY_NAME || 'County ' + props.COUNTY) : '';
+
+  // Total votes: precinct data has an explicit TOTVOTE field; county (live)
+  // data doesn't, but it's simply the sum of the candidate votes already
+  // shown above, so compute it rather than showing a needless 'n/a'.
+  const totalVotes = props.TOTVOTE !== undefined ? fmtNum(props.TOTVOTE) : fmtNum(candidateVotesSum);
+
+  // Registration/turnout/mail-% genuinely don't exist for county-level
+  // (live results) data -- omit those rows entirely rather than show three
+  // rows of 'n/a', which reads as broken rather than "not applicable."
+  const hasRegData = props.TOTREG !== undefined;
+  const extraRows = hasRegData ? `
+      <tr><td class="k">Registered</td><td class="v">${fmtNum(props.TOTREG)}</td></tr>
+      <tr><td class="k">Turnout</td><td class="v">${fmtPct(props.TURNOUT_PCT)}</td></tr>
+      <tr><td class="k">Mail %</td><td class="v">${fmtPct(props.MAIL_PCT)}</td></tr>` : '';
+
+  return `<div class="title">${title}</div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:6px;">${subtitle}</div>
+    <table>${rows}
+      <tr><td class="k">Total votes</td><td class="v">${totalVotes}</td></tr>${extraRows}
+    </table>`;
+}
+
+function renderMap(data) {
+  initMap();
+  map.invalidateSize();
+  if (geoLayer) map.removeLayer(geoLayer);
+
+  const candidateCols = data.candidates.map(c => getCandidateKey(c));
+
+  geoLayer = L.geoJSON(data.geojson, {
+    style: f => styleFeature(f, candidateCols),
+    onEachFeature: (f, layer) => {
+      layer.bindPopup(popupHtml(f.properties, data.candidates));
+      const base = styleFeature(f, candidateCols);
+      layer.on('mouseover', () => layer.setStyle({ weight: 2, color: '#17201b' }));
+      layer.on('mouseout', () => layer.setStyle(base));
+    }
+  }).addTo(map);
+
+  try { map.fitBounds(geoLayer.getBounds(), { maxZoom: 13 }); } catch (e) {}
+  updateLegend();
+}
+
+function updateLegend() {
+  const bar = document.getElementById('legendBar');
+  const labels = document.getElementById('legendLabels');
+  const title = document.getElementById('legendTitle');
+  if (colorMode === 'margin') {
+    title.textContent = 'Leading candidate margin (lighter = closer race)';
+    bar.style.background = 'linear-gradient(to right, #e7e0c8, #1f3a34)';
+    labels.innerHTML = '<span>Close</span><span></span><span>Dominant</span>';
+  } else if (colorMode === 'turnout') {
+    title.textContent = 'Turnout %';
+    bar.style.background = 'linear-gradient(to right, #e7e0c8, #1f3a34)';
+    labels.innerHTML = '<span>0%</span><span></span><span>100%</span>';
+  } else {
+    title.textContent = 'Mail-in vote %';
+    bar.style.background = 'linear-gradient(to right, #e7e0c8, #a3852f)';
+    labels.innerHTML = '<span>0%</span><span></span><span>100%</span>';
+  }
+}
+
+document.getElementById('loadBtn').addEventListener('click', loadResults);
+document.getElementById('colorMode').addEventListener('change', e => {
+  colorMode = e.target.value;
+  if (currentData) renderMap(currentData);
+  else updateLegend();
+});
+updateLegend();
+
+// ---------- Tabs ----------
+document.getElementById('tabResultsBtn').addEventListener('click', () => {
+  document.getElementById('tabResultsBtn').classList.add('active');
+  document.getElementById('tabPredictionBtn').classList.remove('active');
+  document.getElementById('resultsView').style.display = 'block';
+  document.getElementById('predictionView').style.display = 'none';
+});
+document.getElementById('tabPredictionBtn').addEventListener('click', () => {
+  document.getElementById('tabPredictionBtn').classList.add('active');
+  document.getElementById('tabResultsBtn').classList.remove('active');
+  document.getElementById('predictionView').style.display = 'block';
+  document.getElementById('resultsView').style.display = 'none';
+});
+
+// ---------- Prediction ----------
+async function loadPrediction() {
+  const office = document.getElementById('predOffice').value;
+  const district = document.getElementById('predDistrict').value;
+  const year = document.getElementById('predYear').value;
+  const btn = document.getElementById('predictBtn');
+
+  if (!year) { setPredictStatus('Enter a year.', true); return; }
+
+  btn.disabled = true;
+  setPredictStatus('Fetching primary results and historical district data...');
+  document.getElementById('predictContent').style.display = 'none';
+  document.getElementById('predictEmptyState').style.display = 'none';
+
+  const params = new URLSearchParams({ office, year });
+  if (district) params.set('district', district);
+
+  try {
+    const resp = await fetch(`${API_BASE}/api/predict-general?${params.toString()}`);
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err.detail || `Request failed (${resp.status})`);
+    }
+    const data = await resp.json();
+    renderPrediction(data);
+    document.getElementById('predictContent').style.display = 'block';
+    setPredictStatus(`Projected from ${data.matchup_type === 'same_party' ? 'a same-party' : 'a different-party'} primary matchup.`);
+  } catch (e) {
+    setPredictStatus(e.message, true);
+    document.getElementById('predictEmptyState').style.display = 'block';
+    document.getElementById('predictEmptyState').textContent = 'Could not load prediction: ' + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function setPredictStatus(msg, isError) {
+  const el = document.getElementById('predictStatus');
+  el.textContent = msg || '';
+  el.className = 'status' + (isError ? ' error' : '');
+}
+
+function renderPrediction(data) {
+  const badge = document.getElementById('leanBadge');
+  const leaderParty = data.finalists.find(f => f.name === data.projected_leader).party;
+  badge.innerHTML = `<span class="lean-badge lean-${data.lean_label}">${data.lean_label} ${data.projected_leader} (${leaderParty}) \u2014 margin ${data.margin} pts</span>`;
+
+  const cards = document.getElementById('finalistCards');
+  cards.innerHTML = data.finalists
+    .sort((a, b) => b.blended_score - a.blended_score)
+    .map((f, i) => `
+      <div class="finalist-card ${f.name === data.projected_leader ? 'leader' : ''}">
+        ${f.name === data.projected_leader ? '<div class="fc-crown">Projected winner</div>' : ''}
+        <div class="fc-name">${f.name}${f.incumbent ? ' (Incumbent)' : ''}</div>
+        <div class="fc-meta">${f.party} \u2014 ${f.primary_votes.toLocaleString()} primary votes</div>
+        <div class="fc-score">${f.blended_score}</div>
+      </div>
+    `).join('');
+
+  const factors = document.getElementById('factorBreakdown');
+  const histNote = data.historical_data_used.length
+    ? `Used general elections from: ${data.historical_data_used.join(', ')}`
+    : 'No historical general-election data was available for this district -- that factor was neutral (50/50) in the blend.';
+  factors.innerHTML = `
+    <div class="factor-row"><span>Matchup type</span><span>${data.matchup_type === 'same_party' ? 'Same party (primary signal weighted lower)' : 'Different party'}</span></div>
+    <div class="factor-row"><span>Historical data</span><span>${histNote}</span></div>
+  `;
+
+  document.getElementById('methodologyBox').textContent = data.methodology_note;
+}
+
+document.getElementById('predictBtn').addEventListener('click', loadPrediction);
+</script>
+</body>
+</html>
