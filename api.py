@@ -226,6 +226,33 @@ def election_data(
     return result
 
 
+def _try_swdb_totals_only(office, district, year, election_type):
+    """
+    Lightweight variant of _try_swdb_pathway for callers that only need
+    candidate vote TOTALS, not precinct geometry -- used by prediction,
+    which never needs a map. Skips downloading/loading the shapefile
+    entirely (confirmed necessary: loading the full statewide shapefile
+    multiple times in one request -- once for the primary, once per
+    historical lookback year -- was causing out-of-memory crashes on a
+    512MB deployment).
+    """
+    file_set = resolver.resolve_files(year, election_type)  # raises LookupError if year not found
+    if not file_set.sov_srprec_url:
+        raise LookupError(f"SOV data not found on statewidedatabase.org for {election_type} {year}.")
+
+    local_paths = fetcher.fetch_many({"sov": file_set.sov_srprec_url})
+    sov_df = pipeline.load_sov(local_paths["sov"])
+
+    try:
+        candidate_names = get_candidate_names(
+            office=office, district=district, year=year, election_type=election_type
+        )
+    except LookupError:
+        candidate_names = {}
+
+    return pipeline.aggregate_candidate_totals(sov_df, office, district, candidate_names)
+
+
 @app.get("/api/predict-general")
 def predict_general(
     office: str = Query(..., description="Office code, e.g. SEN, ASS, CNG, GOV"),
@@ -234,11 +261,12 @@ def predict_general(
 ):
     """
     Projects the likely GENERAL election winner for `year`, based on that
-    year's PRIMARY results (fetched via the same pathways as /api/election-data).
-    See prediction.py for full methodology and its documented limitations.
+    year's PRIMARY results. Uses the lightweight totals-only pathway
+    throughout (see _try_swdb_totals_only) since prediction never needs
+    precinct geometry, only vote counts.
     """
     try:
-        primary_result = _try_swdb_pathway(office, district, year, "Primary")
+        primary_result = _try_swdb_totals_only(office, district, year, "Primary")
     except LookupError:
         try:
             primary_result = _try_live_pathway(office, district, year, "Primary")
@@ -254,7 +282,7 @@ def predict_general(
             district=district,
             target_year=year,
             primary_candidates=primary_result["candidates"],
-            fetch_swdb_fn=_try_swdb_pathway,
+            fetch_swdb_fn=_try_swdb_totals_only,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

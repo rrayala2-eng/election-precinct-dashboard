@@ -110,6 +110,43 @@ def extract_candidate_columns(df: pd.DataFrame, office: str) -> list[str]:
     return [c for c in df.columns if pattern.match(c)]
 
 
+def aggregate_candidate_totals(sov_df: pd.DataFrame, office: str, district: int | None, candidate_names: dict | None = None) -> dict:
+    """
+    Lightweight alternative to build_precinct_dataset() for callers that
+    only need vote TOTALS per candidate -- no precinct geometry at all.
+
+    This matters for memory: build_precinct_dataset() requires loading and
+    joining a full statewide shapefile, which is the single heaviest thing
+    this app does. The prediction feature calls this multiple times per
+    request (once for the primary, once per historical lookback year) and
+    never needs geometry at all -- confirmed this was causing out-of-memory
+    crashes on a 512MB deployment. This function does the same
+    filter+sum+coerce work as build_precinct_dataset() but skips the
+    shapefile entirely, so callers that only need totals (like
+    prediction.py) never have to load it.
+    """
+    candidate_names = candidate_names or {}
+    filtered, _key_col, counties = filter_to_district(sov_df, office, district)
+    cand_cols = extract_candidate_columns(filtered, office)
+    if not cand_cols:
+        raise ValueError(f"No candidate columns found for office '{office}' in this dataset.")
+
+    for col in cand_cols:
+        filtered[col] = pd.to_numeric(filtered[col], errors="coerce").fillna(0)
+
+    candidates = []
+    for c in cand_cols:
+        total = filtered[c].sum()
+        candidates.append({
+            "column": c,
+            "name": candidate_names.get(c, c),
+            "party": c[len(office):len(office) + 3],
+            "total_votes": 0 if pd.isna(total) else int(total),
+        })
+
+    return {"office": office, "district": district, "counties": counties, "candidates": candidates}
+
+
 def build_precinct_dataset(
     office: str,
     district: int | None,
