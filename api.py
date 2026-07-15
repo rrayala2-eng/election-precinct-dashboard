@@ -41,6 +41,10 @@ import prediction
 import result_cache
 from candidate_lookup import get_candidate_names
 
+import threading
+import datetime
+from contextlib import asynccontextmanager
+
 # --- Site-wide login (native browser username/password popup) ---
 # Credentials come from environment variables, NOT hardcoded, so the real
 # password never ends up committed to GitHub. Set DASHBOARD_USERNAME and
@@ -66,7 +70,82 @@ def require_login(credentials: HTTPBasicCredentials = Depends(security)):
     return credentials.username
 
 
-app = FastAPI(title="Election Precinct Dashboard API", dependencies=[Depends(require_login)])
+def _prewarm_cache():
+    """
+    Downloads (but doesn't yet need to parse) the current election cycle's
+    statewide vote-data files, PLUS the historical years Prediction's
+    lookback needs -- runs once in the background when the server starts,
+    so the FIRST real user request doesn't pay the full 30-50s cold-
+    download cost no matter which tab (Results or Prediction) or which
+    specific district/office they happen to try first.
+
+    IMPORTANT: this covers Prediction's full download needs, not just the
+    target year. Prediction also fetches up to 4 PAST years' GENERAL
+    results for its historical-lean comparison (see
+    prediction.HISTORICAL_LOOKBACK_YEARS) -- confirmed via real testing
+    that skipping those left a real gap: a user hitting Prediction cold
+    (never having used Results first) still paid the full download cost
+    for those historical years even after the target-year pre-warm. This
+    function now pre-warms ALL of them, reusing the same lookback list
+    Prediction itself uses so the two never drift out of sync.
+
+    Why one download covers every district/office: the source files are
+    STATEWIDE (one CSV covers all of California for a given year+type),
+    so warming it once benefits every possible request for that year, not
+    just one specific district. Only the download step is pre-warmed here
+    (via fetcher.py's file cache) -- the per-district parsing still happens
+    on first real request, but that part was already shown to be the
+    smaller portion of the total wait.
+
+    Silently does nothing if a given year/type isn't published yet
+    (e.g. this year's General hasn't happened) -- not an error, just
+    nothing to warm yet.
+    """
+    current_year = datetime.datetime.now().year
+    # CA statewide/legislative elections only happen in even years.
+    target_year = current_year if current_year % 2 == 0 else current_year - 1
+
+    def _warm_one(year, election_type):
+        try:
+            file_set = resolver.resolve_files(year, election_type)
+            if file_set.sov_srprec_url:
+                fetcher.fetch_many({"sov": file_set.sov_srprec_url})
+        except LookupError:
+            pass  # not published on statewidedatabase.org yet -- nothing to warm
+
+    # Target year: both Primary and General (whichever Results/Prediction
+    # would need depending on what the user searches).
+    for election_type in ["Primary", "General"]:
+        _warm_one(target_year, election_type)
+
+    # Historical lookback years: Prediction always fetches GENERAL results
+    # for these, regardless of which office/district is being predicted.
+    for years_back in prediction.HISTORICAL_LOOKBACK_YEARS:
+        hist_year = target_year - years_back
+        if hist_year >= 2000:
+            _warm_one(hist_year, "General")
+
+    try:
+        county_geo.load_county_boundaries()  # small, static, used by the live pathway
+    except Exception:
+        pass  # best-effort only -- a failed pre-warm should never block startup
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Runs in a background daemon thread so it never blocks the server from
+    # starting up or responding to health checks -- if it's still running
+    # when the first real request comes in, that request just proceeds
+    # normally (falls through to the regular download-on-demand path).
+    threading.Thread(target=_prewarm_cache, daemon=True).start()
+    yield
+
+
+app = FastAPI(
+    title="Election Precinct Dashboard API",
+    dependencies=[Depends(require_login)],
+    lifespan=lifespan,
+)
 
 # Same-origin now that the backend serves the frontend directly (see the
 # static-file route below), so this is mainly a safety net for anyone
