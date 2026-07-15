@@ -100,7 +100,13 @@ def get_historical_district_lean(office: str, district: int | None, before_year:
     party_share_samples = []
     years_used = []
 
-    with ThreadPoolExecutor(max_workers=len(candidate_years) or 1) as pool:
+    # NOTE: capped at 2 concurrent workers, not len(candidate_years).
+    # Confirmed via a real production crash: running all 4 lookback fetches
+    # fully concurrently sped things up, but meant up to 4 large statewide
+    # datasets sat in memory AT THE SAME TIME, which exceeded the 512MB
+    # memory limit on the hosting tier and crashed the server. Capping at 2
+    # keeps some of the speed benefit while keeping peak memory bounded.
+    with ThreadPoolExecutor(max_workers=min(2, len(candidate_years) or 1)) as pool:
         for year, result in pool.map(_fetch_one, candidate_years):
             if result is None:
                 continue
