@@ -27,6 +27,7 @@ therefore treated as a WEAKER signal than different-party primary margins
 """
 
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 
 # How much each factor contributes to the blended score, on a 0-100 scale.
 # Same-party matchups deliberately weight the primary-vote signal lower
@@ -73,14 +74,17 @@ def get_historical_district_lean(office: str, district: int | None, before_year:
     `fetch_swdb_fn` is injected (rather than imported directly) so this
     module doesn't need to know which pathway function to call -- api.py
     passes in its own _try_swdb_pathway.
-    """
-    party_share_samples = []
-    years_used = []
 
-    for years_back in HISTORICAL_LOOKBACK_YEARS:
-        year = before_year - years_back
-        if year < 2000:
-            continue
+    Fetches all lookback years CONCURRENTLY rather than one at a time.
+    These are independent network/IO-bound lookups (each a different
+    year's file) with no dependency on each other, so there's no reason to
+    wait for one to finish before starting the next -- confirmed this was
+    a real, meaningful chunk of first-run prediction latency (up to 4
+    sequential downloads+parses, one per lookback year).
+    """
+    candidate_years = [before_year - yb for yb in HISTORICAL_LOOKBACK_YEARS if before_year - yb >= 2000]
+
+    def _fetch_one(year):
         try:
             result = fetch_swdb_fn(office, district, year, "General")
         except (LookupError, ValueError):
@@ -89,17 +93,29 @@ def get_historical_district_lean(office: str, district: int | None, before_year:
             # wasn't on the ballot that year (e.g. Governor is only elected
             # every 4 years, so an off-cycle year like 2024 genuinely has no
             # GOV columns in that year's data at all). Both cases mean the
-            # same thing for our purposes: skip this year, try the next one.
-            continue
+            # same thing for our purposes: skip this year.
+            return year, None
+        return year, result
 
-        candidates = result.get("candidates", [])
-        totals = _party_totals(candidates)
-        grand_total = sum(totals.values())
-        if grand_total == 0:
-            continue
+    party_share_samples = []
+    years_used = []
 
-        party_share_samples.append({p: v / grand_total * 100 for p, v in totals.items()})
-        years_used.append(year)
+    with ThreadPoolExecutor(max_workers=len(candidate_years) or 1) as pool:
+        for year, result in pool.map(_fetch_one, candidate_years):
+            if result is None:
+                continue
+            candidates = result.get("candidates", [])
+            totals = _party_totals(candidates)
+            grand_total = sum(totals.values())
+            if grand_total == 0:
+                continue
+            party_share_samples.append({p: v / grand_total * 100 for p, v in totals.items()})
+            years_used.append(year)
+
+    # Keep deterministic ordering (most recent first) regardless of which
+    # thread happened to finish first -- matters for readability of the
+    # "years_used" field shown in the UI, not for the math itself.
+    years_used.sort(reverse=True)
 
     if not party_share_samples:
         return None
