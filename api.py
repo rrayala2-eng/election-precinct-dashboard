@@ -37,6 +37,7 @@ import pipeline
 import live_resolver
 import county_geo
 import prediction
+import result_cache
 from candidate_lookup import get_candidate_names
 
 # --- Site-wide login (native browser username/password popup) ---
@@ -235,7 +236,16 @@ def _try_swdb_totals_only(office, district, year, election_type):
     multiple times in one request -- once for the primary, once per
     historical lookback year -- was causing out-of-memory crashes on a
     512MB deployment).
+
+    Also caches the final computed result (see result_cache.py) -- confirmed
+    that re-parsing a full statewide CSV with pandas on every request was
+    real, measurable CPU time even when the raw file itself was already
+    downloaded/cached by fetcher.py. This second cache layer skips that too.
     """
+    cached = result_cache.get(office, district, year, election_type)
+    if cached is not None:
+        return cached
+
     file_set = resolver.resolve_files(year, election_type)  # raises LookupError if year not found
     if not file_set.sov_srprec_url:
         raise LookupError(f"SOV data not found on statewidedatabase.org for {election_type} {year}.")
@@ -250,7 +260,9 @@ def _try_swdb_totals_only(office, district, year, election_type):
     except LookupError:
         candidate_names = {}
 
-    return pipeline.aggregate_candidate_totals(sov_df, office, district, candidate_names)
+    result = pipeline.aggregate_candidate_totals(sov_df, office, district, candidate_names)
+    result_cache.set(office, district, year, election_type, result)
+    return result
 
 
 @app.get("/api/predict-general")
