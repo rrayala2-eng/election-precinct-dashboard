@@ -28,7 +28,7 @@ import re
 import json
 import requests
 import pdfplumber
-import tempfile
+import fetcher
 
 BASE = "https://elections.cdn.sos.ca.gov/statewide-elections"
 CACHE_DIR = os.environ.get("CANDIDATE_CACHE_DIR", "/tmp/candidate_cache")
@@ -105,27 +105,38 @@ def _download_office_pdf(year: int, election_type: str, office: str) -> tuple[st
     Returns (local_pdf_path, is_combined).
     is_combined=True means this is a whole-election, all-offices document
     (older years), so parsing needs to disambiguate by office section name.
+
+    Uses fetcher.py's persistent, hash-keyed cache (same one used for the
+    statewide vote-data files) instead of a temp file. CONFIRMED this
+    matters: the old version downloaded fresh into a temp file and deleted
+    it after every single call -- so looking up a SECOND district for the
+    same office+year (e.g. AD1 right after AD55) re-downloaded and re-
+    parsed the exact same PDF from scratch, even though nothing about it
+    had changed. Caching by URL means the second lookup reuses the same
+    file instantly.
     """
     election_slug = f"{year}-{election_type.lower()}"
 
     for office_slug in OFFICE_SLUGS.get(office.upper(), []):
         url = f"{BASE}/{election_slug}/{office_slug}.pdf"
-        resp = requests.get(url, headers=HEADERS, timeout=30)
-        if resp.status_code == 200 and resp.content[:4] == b"%PDF":
-            tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
-            tmp.write(resp.content)
-            tmp.close()
-            return tmp.name, False
+        try:
+            path = fetcher.fetch(url)
+        except requests.RequestException:
+            continue
+        with open(path, "rb") as f:
+            if f.read(4) == b"%PDF":
+                return path, False
 
     # Fallback: older years publish one combined PDF for every office
     for filename in COMBINED_LIST_FILENAMES:
         url = f"{BASE}/{election_slug}/{filename}"
-        resp = requests.get(url, headers=HEADERS, timeout=30)
-        if resp.status_code == 200 and resp.content[:4] == b"%PDF":
-            tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
-            tmp.write(resp.content)
-            tmp.close()
-            return tmp.name, True
+        try:
+            path = fetcher.fetch(url)
+        except requests.RequestException:
+            continue
+        with open(path, "rb") as f:
+            if f.read(4) == b"%PDF":
+                return path, True
 
     raise LookupError(
         f"Could not find any certified candidate PDF (per-office or combined) "
@@ -139,20 +150,19 @@ def _download_write_in_pdf(year: int, election_type: str) -> str | None:
     """
     Best-effort fetch of the write-in candidate list. Unlike the regular
     list, this is optional -- returns None instead of raising if not found,
-    since most races have no write-in candidates worth chasing.
+    since most races have no write-in candidates worth chasing. Also uses
+    fetcher.py's persistent cache, same reasoning as _download_office_pdf.
     """
     election_slug = f"{year}-{election_type.lower()}"
     for filename in WRITE_IN_LIST_FILENAMES:
         url = f"{BASE}/{election_slug}/{filename}"
         try:
-            resp = requests.get(url, headers=HEADERS, timeout=30)
+            path = fetcher.fetch(url)
         except requests.RequestException:
             continue
-        if resp.status_code == 200 and resp.content[:4] == b"%PDF":
-            tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
-            tmp.write(resp.content)
-            tmp.close()
-            return tmp.name
+        with open(path, "rb") as f:
+            if f.read(4) == b"%PDF":
+                return path
     return None
 
 
@@ -267,11 +277,8 @@ def get_candidate_names(
         return cache[cache_key]
 
     pdf_path, is_combined = _download_office_pdf(year, election_type, office)
-    try:
-        with pdfplumber.open(pdf_path) as pdf:
-            full_text = "\n".join(page.extract_text() or "" for page in pdf.pages)
-    finally:
-        os.remove(pdf_path)
+    with pdfplumber.open(pdf_path) as pdf:
+        full_text = "\n".join(page.extract_text() or "" for page in pdf.pages)
 
     candidates = _parse_district_section(full_text, district, office=office, combined=is_combined)
 
@@ -291,8 +298,6 @@ def get_candidate_names(
             candidates = candidates + write_in_candidates
         except LookupError:
             pass  # no write-in candidates for this district -- fine, ignore
-        finally:
-            os.remove(write_in_path)
     if not candidates:
         raise LookupError(
             f"Parsed the PDF but found no candidates for office={office}, "

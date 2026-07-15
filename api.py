@@ -125,6 +125,24 @@ def _prewarm_cache():
         if hist_year >= 2000:
             _warm_one(hist_year, "General")
 
+    # Candidate name PDFs -- one per OFFICE (not per district), since the
+    # PDF-level cache fix in candidate_lookup.py means fetching it once for
+    # ANY district of that office now benefits every other district too.
+    # District 1 is just a representative example to trigger the fetch --
+    # statewide offices (GOV, LTG, etc.) use None since they have no
+    # district at all. Best-effort: a missing/unparseable PDF for one
+    # office should never block the rest of pre-warming.
+    for office, district_col in pipeline.DISTRICT_COLUMN.items():
+        representative_district = 1 if district_col else None
+        for election_type in ["Primary", "General"]:
+            try:
+                get_candidate_names(
+                    office=office, district=representative_district,
+                    year=target_year, election_type=election_type,
+                )
+            except LookupError:
+                pass  # this office/year/type genuinely has no PDF yet -- fine
+
     try:
         county_geo.load_county_boundaries()  # small, static, used by the live pathway
     except Exception:
