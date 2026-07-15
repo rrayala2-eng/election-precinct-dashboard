@@ -17,6 +17,7 @@ import os
 import re
 import zipfile
 import tempfile
+import gc
 import pandas as pd
 import geopandas as gpd
 
@@ -144,7 +145,18 @@ def aggregate_candidate_totals(sov_df: pd.DataFrame, office: str, district: int 
             "total_votes": 0 if pd.isna(total) else int(total),
         })
 
-    return {"office": office, "district": district, "counties": counties, "candidates": candidates}
+    result = {"office": office, "district": district, "counties": counties, "candidates": candidates}
+
+    # Explicitly release the (potentially large, statewide) raw and filtered
+    # DataFrames now that we only need the small `result` dict -- confirmed
+    # necessary: this function is called repeatedly within one request
+    # (prediction's historical lookback), and on a memory-constrained
+    # deployment, letting these linger until Python's GC gets around to
+    # them on its own was contributing to gradual memory growth.
+    del sov_df, filtered
+    gc.collect()
+
+    return result
 
 
 def build_precinct_dataset(
@@ -264,13 +276,23 @@ def build_precinct_dataset(
             "total_votes": 0 if pd.isna(total) else int(total),
         })
 
-    return {
+    result = {
         "office": office,
         "district": district,
         "counties": counties,
         "candidates": candidates,
         "geojson": merged.to_json(),  # GeoDataFrame -> GeoJSON string
     }
+
+    # Explicitly release the large intermediate objects (the full statewide
+    # sov_df/geo inputs, plus filtered/grouped/merged working copies) now
+    # that only the small serialized `result` dict is needed. Confirmed
+    # necessary on a memory-constrained deployment -- see the matching note
+    # in aggregate_candidate_totals() for the full explanation.
+    del sov_df, geo, filtered, grouped, merged
+    gc.collect()
+
+    return result
 
 
 def build_county_level_dataset(office, district, live_data, county_results, county_geo):
