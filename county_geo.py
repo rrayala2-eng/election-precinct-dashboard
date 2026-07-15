@@ -34,6 +34,20 @@ def _slugify(name: str) -> str:
     return name.strip().lower().replace(" ", "-")
 
 
+def _download_to_cache():
+    """
+    Downloads to a temp file, then atomically renames it into place.
+    Same pattern as fetcher.py -- prevents a concurrent reader from ever
+    seeing a partially-written (and therefore corrupted/unreadable) file.
+    """
+    resp = requests.get(COUNTY_GEOJSON_URL, headers=HEADERS, timeout=60)
+    resp.raise_for_status()
+    tmp_path = CACHE_PATH + ".part"
+    with open(tmp_path, "wb") as f:
+        f.write(resp.content)
+    os.replace(tmp_path, CACHE_PATH)
+
+
 def load_county_boundaries(force_refresh: bool = False) -> gpd.GeoDataFrame:
     """
     Returns a GeoDataFrame with one row per CA county, including a
@@ -42,12 +56,22 @@ def load_county_boundaries(force_refresh: bool = False) -> gpd.GeoDataFrame:
     directly.
     """
     if not os.path.exists(CACHE_PATH) or force_refresh:
-        resp = requests.get(COUNTY_GEOJSON_URL, headers=HEADERS, timeout=60)
-        resp.raise_for_status()
-        with open(CACHE_PATH, "wb") as f:
-            f.write(resp.content)
+        _download_to_cache()
 
-    geo = gpd.read_file(CACHE_PATH)
+    try:
+        geo = gpd.read_file(CACHE_PATH)
+    except Exception:
+        # Cache file is corrupted (confirmed real cause: the old version of
+        # this function wrote directly to CACHE_PATH rather than
+        # atomically, so a request reading mid-write could see a partial/
+        # garbage file -- and since it existed, every later request would
+        # keep hitting the same corrupted file until a redeploy wiped /tmp).
+        # Self-heal: delete the bad file and download fresh once, rather
+        # than requiring a manual fix or a full redeploy.
+        if os.path.exists(CACHE_PATH):
+            os.remove(CACHE_PATH)
+        _download_to_cache()
+        geo = gpd.read_file(CACHE_PATH)
 
     # CONFIRMED real issue: this file comes in EPSG:3857 (Web Mercator,
     # meters) rather than plain lat/lon. Leaflet only understands lat/lon
