@@ -255,6 +255,42 @@ def _assign_column_codes(office: str, candidates: list[dict]) -> dict:
     return result
 
 
+def _extracted_text_path(office: str, year: int, election_type: str, kind: str) -> str:
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    return os.path.join(CACHE_DIR, f"{office}_{year}_{election_type.lower()}_{kind}_text.txt")
+
+
+def _get_extracted_text(pdf_path: str, office: str, year: int, election_type: str, kind: str) -> str:
+    """
+    Returns the full extracted text of a PDF, using a persistent cache
+    keyed by (office, year, election_type, kind) -- 'kind' distinguishes
+    the regular list from the write-in list.
+
+    CONFIRMED real bottleneck this fixes: the PDF file itself was already
+    cached (see _download_office_pdf), but pdfplumber's text extraction is
+    a separate, genuinely slow step that was re-running from scratch every
+    time a DIFFERENT district asked about the same office's PDF -- e.g.
+    pre-warming covers district 1, but a real request for district 40
+    still had to fully re-extract text from an already-downloaded PDF.
+    Caching the extracted text itself means only the first district for a
+    given office/year pays that cost; every other district reuses it.
+    """
+    text_path = _extracted_text_path(office, year, election_type, kind)
+    if os.path.exists(text_path):
+        with open(text_path, encoding="utf-8") as f:
+            return f.read()
+
+    with pdfplumber.open(pdf_path) as pdf:
+        full_text = "\n".join(page.extract_text() or "" for page in pdf.pages)
+
+    tmp_path = text_path + ".part"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        f.write(full_text)
+    os.replace(tmp_path, text_path)  # atomic, same reasoning as fetcher.py
+
+    return full_text
+
+
 def get_candidate_names(
     office: str,
     district: int | None,
@@ -277,8 +313,7 @@ def get_candidate_names(
         return cache[cache_key]
 
     pdf_path, is_combined = _download_office_pdf(year, election_type, office)
-    with pdfplumber.open(pdf_path) as pdf:
-        full_text = "\n".join(page.extract_text() or "" for page in pdf.pages)
+    full_text = _get_extracted_text(pdf_path, office, year, election_type, "regular")
 
     candidates = _parse_district_section(full_text, district, office=office, combined=is_combined)
 
@@ -290,8 +325,7 @@ def get_candidate_names(
     write_in_path = _download_write_in_pdf(year, election_type)
     if write_in_path:
         try:
-            with pdfplumber.open(write_in_path) as pdf:
-                write_in_text = "\n".join(page.extract_text() or "" for page in pdf.pages)
+            write_in_text = _get_extracted_text(write_in_path, office, year, election_type, "writein")
             write_in_candidates = _parse_district_section(
                 write_in_text, district, office=office, combined=True
             )
