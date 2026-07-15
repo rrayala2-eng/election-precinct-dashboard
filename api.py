@@ -126,19 +126,33 @@ def _prewarm_cache():
             _warm_one(hist_year, "General")
 
     # Candidate name PDFs -- one per OFFICE (not per district), since the
-    # PDF-level cache fix in candidate_lookup.py means fetching it once for
-    # ANY district of that office now benefits every other district too.
-    # District 1 is just a representative example to trigger the fetch --
-    # statewide offices (GOV, LTG, etc.) use None since they have no
-    # district at all. Best-effort: a missing/unparseable PDF for one
-    # office should never block the rest of pre-warming.
+    # PDF-level and text-level caches in candidate_lookup.py mean fetching
+    # it once for ANY district of that office now benefits every other
+    # district too. District 1 is just a representative example to trigger
+    # the fetch -- statewide offices (GOV, LTG, etc.) use None since they
+    # have no district at all. Best-effort: a missing/unparseable PDF for
+    # one office/year should never block the rest of pre-warming.
+    #
+    # IMPORTANT: covers BOTH the target year AND every historical lookback
+    # year, not just the target year. Confirmed via real testing this was
+    # a genuine gap -- prediction's historical lookback always calls
+    # get_candidate_names too (since it reuses _try_swdb_totals_only), so
+    # skipping those years left every historical year's candidate PDF
+    # completely cold on a real user's first Prediction request, even
+    # after the target year itself was fully pre-warmed.
+    years_to_prewarm_candidates = [(target_year, "Primary"), (target_year, "General")]
+    for years_back in prediction.HISTORICAL_LOOKBACK_YEARS:
+        hist_year = target_year - years_back
+        if hist_year >= 2000:
+            years_to_prewarm_candidates.append((hist_year, "General"))
+
     for office, district_col in pipeline.DISTRICT_COLUMN.items():
         representative_district = 1 if district_col else None
-        for election_type in ["Primary", "General"]:
+        for warm_year, election_type in years_to_prewarm_candidates:
             try:
                 get_candidate_names(
                     office=office, district=representative_district,
-                    year=target_year, election_type=election_type,
+                    year=warm_year, election_type=election_type,
                 )
             except LookupError:
                 pass  # this office/year/type genuinely has no PDF yet -- fine
@@ -339,9 +353,19 @@ def _try_swdb_totals_only(office, district, year, election_type):
     that re-parsing a full statewide CSV with pandas on every request was
     real, measurable CPU time even when the raw file itself was already
     downloaded/cached by fetcher.py. This second cache layer skips that too.
+
+    IMPORTANT: the "office wasn't on the ballot this year" case (ValueError
+    from aggregate_candidate_totals -- e.g. Governor doesn't run in an
+    off-cycle year) is cached too, not just successes. CONFIRMED this was a
+    real gap: offices on a 4-year cycle (BOE, TRS, SPI, GOV, etc.) hit this
+    ValueError on 2 of their 4 historical lookback years EVERY time, and
+    without caching the failure itself, each repeat request redid the full
+    download+parse just to fail the same way again.
     """
     cached = result_cache.get(office, district, year, election_type)
     if cached is not None:
+        if isinstance(cached, dict) and cached.get("_cached_error") == "ValueError":
+            raise ValueError(cached["detail"])
         return cached
 
     file_set = resolver.resolve_files(year, election_type)  # raises LookupError if year not found
@@ -358,7 +382,15 @@ def _try_swdb_totals_only(office, district, year, election_type):
     except LookupError:
         candidate_names = {}
 
-    result = pipeline.aggregate_candidate_totals(sov_df, office, district, candidate_names)
+    try:
+        result = pipeline.aggregate_candidate_totals(sov_df, office, district, candidate_names)
+    except ValueError as e:
+        # Cache the failure itself (a small marker dict), so a repeat
+        # request for this same off-cycle combination fails FAST instead
+        # of re-downloading and re-parsing the whole file again.
+        result_cache.set(office, district, year, election_type, {"_cached_error": "ValueError", "detail": str(e)})
+        raise
+
     result_cache.set(office, district, year, election_type, result)
     return result
 
