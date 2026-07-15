@@ -100,13 +100,16 @@ def get_historical_district_lean(office: str, district: int | None, before_year:
     party_share_samples = []
     years_used = []
 
-    # NOTE: capped at 2 concurrent workers, not len(candidate_years).
-    # Confirmed via a real production crash: running all 4 lookback fetches
-    # fully concurrently sped things up, but meant up to 4 large statewide
-    # datasets sat in memory AT THE SAME TIME, which exceeded the 512MB
-    # memory limit on the hosting tier and crashed the server. Capping at 2
-    # keeps some of the speed benefit while keeping peak memory bounded.
-    with ThreadPoolExecutor(max_workers=min(2, len(candidate_years) or 1)) as pool:
+    # NOTE: cap is tied to available memory, not just "more is always better".
+    # Confirmed via a real production crash on a 512MB instance: running all
+    # 4 lookback fetches fully concurrently meant up to 4 large statewide
+    # datasets sat in memory AT THE SAME TIME, exceeding the memory limit.
+    # Set to 3 (not the full 4) after upgrading to a 2GB instance, because
+    # api.py now also runs the PRIMARY fetch concurrently with this whole
+    # function -- so real peak concurrent heavy fetches is primary(1) +
+    # historical(3) = 4 at once, not 5. If memory pressure returns, lower
+    # this further before assuming something else is wrong.
+    with ThreadPoolExecutor(max_workers=min(3, len(candidate_years) or 1)) as pool:
         for year, result in pool.map(_fetch_one, candidate_years):
             if result is None:
                 continue
@@ -143,11 +146,21 @@ def predict_general_winner(
     target_year: int,
     primary_candidates: list[dict],
     fetch_swdb_fn,
+    precomputed_historical: dict | None = "unset",
 ) -> dict:
     """
     Main entry point. `primary_candidates` is the `candidates` list already
     returned by the app's existing primary-results fetch (same shape used
     everywhere else: {name, party, total_votes, incumbent}).
+
+    `precomputed_historical`: optional. The primary fetch and the historical
+    lookback don't actually depend on each other, so a caller can fetch both
+    CONCURRENTLY (e.g. api.py running them in parallel threads) and pass the
+    already-computed historical result in here, skipping a redundant
+    sequential fetch. If left as the default sentinel, this function
+    computes it itself via fetch_swdb_fn (original, fully self-contained
+    behavior, still correct -- just slower, since it becomes one more
+    sequential stage instead of running in parallel with the primary fetch).
     """
     if len(primary_candidates) < 2:
         raise ValueError("Need at least 2 primary candidates to project a general matchup.")
@@ -182,7 +195,10 @@ def predict_general_winner(
         incumbency_score[f["name"]] = 65 if f.get("incumbent") else 35
 
     # --- Factor 3: historical district lean ---
-    historical = get_historical_district_lean(office, district, target_year, fetch_swdb_fn)
+    if precomputed_historical != "unset":
+        historical = precomputed_historical
+    else:
+        historical = get_historical_district_lean(office, district, target_year, fetch_swdb_fn)
     historical_score = {}
     if historical:
         avg_share = historical["average_party_share"]
